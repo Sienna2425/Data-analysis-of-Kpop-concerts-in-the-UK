@@ -1,0 +1,11 @@
+---
+title: "Data anlaysis"
+author: "AF00046"
+date: "2025-08"
+output: word_document
+---
+
+```{r}
+
+```
+

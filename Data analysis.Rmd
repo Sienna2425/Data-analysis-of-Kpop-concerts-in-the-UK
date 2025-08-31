@@ -6,6 +6,370 @@ output: word_document
 ---
 
 ```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+olivia <- read_csv("../data/olivia.csv") %>% mutate(artist = "olivia")
+sabrina <- read_csv("../data/sabrina.csv") %>% mutate(artist = "sabrina")
+txt <- read_csv("../data/txt.csv") %>% mutate(artist = "txt")
+smtown <- read_csv("../data/smtown.csv") %>% mutate(artist = "smtown")
+```
+```{r}
+wpop <- bind_rows(olivia, sabrina) %>% mutate(group = "wpop")
+kpop <- bind_rows(txt, smtown) %>% mutate(group = "kpop")
+```
 
+```{r}
+library(stringr)
+
+clean_comment_text <- function(text) {
+  text %>%
+    tolower() %>%
+    str_remove_all("@\\w+") %>%
+    str_remove_all("#\\w+") %>%
+    str_remove_all("http\\S+|www\\S+") %>%
+    str_remove_all("[^a-zA-Z\\s]") %>%  # 영어만 남기고 나머지 제거
+    str_replace_all("(.)\\1{2,}", "\\1\\1") %>%
+    str_squish()
+}
+```
+
+```{r}
+wpop <- wpop %>%
+  mutate(clean_text = clean_comment_text(text))
+kpop <- kpop %>%
+  mutate(clean_text = clean_comment_text(text))
+```
+```{r}
+wpop %>% filter(clean_text == "") %>% nrow()
+kpop %>% filter(clean_text == "") %>% nrow()
+```
+```{r}
+wpop <- wpop %>% filter(clean_text != "")
+kpop <- kpop %>% filter(clean_text != "")
+```
+```{r}
+wpop <- wpop %>%
+filter(!author %in% c("@rubalkingarcia5143",
+"@laisdeoliveirarodrigues9322",
+"@FerminCarzado"))
+```
+```{r}
+nrow(wpop)
+nrow(kpop)
+```
+
+```{r}
+#Keyword Frequency Analysis
+#tokenisation (by word)
+library(tidytext)
+
+# wpop
+wpop_tokens <- wpop %>%
+  unnest_tokens(word, clean_text)
+
+# kpop
+kpop_tokens <- kpop %>%
+  unnest_tokens(word, clean_text)
+```
+
+```{r}
+wpop_tokens <- wpop_tokens %>%
+filter(!word %in% stop_words$word)
+
+kpop_tokens <- kpop_tokens %>%
+filter(!word %in% stop_words$word)
+```
+
+```{r}
+#top keywords extraction
+library(dplyr)
+
+wpop_word_freq <- wpop_tokens %>%
+  count(word, sort = TRUE)
+
+kpop_word_freq <- kpop_tokens %>%
+  count(word, sort = TRUE)
+```
+
+```{r}
+#Top 15 visualisation
+
+# Wpop
+wpop_word_freq %>%
+  slice_max(n, n = 15) %>%
+  ggplot(aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "blue") +
+  coord_flip() +
+  labs(title = "Top Words in Wpop Comments", x = "Word", y = "Frequency")
+
+# Kpop
+kpop_word_freq %>%
+  slice_max(n, n = 15) %>%
+  ggplot(aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "red") +
+  coord_flip() +
+  labs(title = "Top Words in Kpop Comments", x = "Word", y = "Frequency")
+
+```
+```{r}
+#LDA Topic Modeling
+#Assign comment ID
+
+wpop_tokens <- wpop_tokens %>%
+  mutate(comment_id = row_number())
+
+kpop_tokens <- kpop_tokens %>%
+  mutate(comment_id = row_number())
+```
+
+```{r}
+#Generate DTM(Document-Term Matrix)
+library(tidytext)
+library(topicmodels)
+
+# Wpop DTM
+wpop_dtm <- wpop_tokens %>%
+  count(comment_id, word) %>%
+  cast_dtm(comment_id, word, n)
+
+# Kpop DTM
+kpop_dtm <- kpop_tokens %>%
+  count(comment_id, word) %>%
+  cast_dtm(comment_id, word, n)
+```
+
+```{r}
+#LDA learning, topic number = 4
+
+set.seed(1)
+wpop_lda <- LDA(wpop_dtm, k = 4, control = list(seed = 1))
+kpop_lda <- LDA(kpop_dtm, k = 4, control = list(seed = 1))
+```
+
+```{r}
+#Keyword extraction, visualisation
+library(ggplot2)
+library(tidyr)
+
+# Wpop topic keyword
+wpop_topics <- tidy(wpop_lda, matrix = "beta") %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  mutate(term = reorder_within(term, beta, topic))
+
+ggplot(wpop_topics, aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Wpop Comments: Top Keywords by Topic",
+       x = "Keyword", y = "Beta")
+```
+```{r}
+# Kpop topic keyword
+kpop_topics <- tidy(kpop_lda, matrix = "beta") %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  mutate(term = reorder_within(term, beta, topic))
+
+ggplot(kpop_topics, aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Kpop Comments: Top Keywords by Topic",
+       x = "Keyword", y = "Beta")
+```
+
+```{r}
+#kpop lda1
+topic1_keywords <- c("concert", "didnt", "stage", "im", "omg", "sm")
+kpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+```{r}
+#kpop lda2
+topic1_keywords <- c("video", "im", "didnt", "amazing", "yuta", "wayv")
+kpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+```{r}
+#kpop lda3
+topic1_keywords <- c("exo", "amazing", "video", "love", "yeonjun")
+kpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+```{r}
+#kpop lda4
+topic1_keywords <- c("im", "concert", "love", "yeonjun")
+kpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+
+
+
+```{r}
+#wpop lda1
+topic1_keywords <- c("love", "omg", "olivia", "im")
+wpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+
+```
+```{r}
+#wpop lda2
+topic1_keywords <- c("sabrina", "im", "shes", "love", "song")
+wpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+```{r}
+#wpop lda3
+topic1_keywords <- c("im", "shes", "night", "concert", "mic", "british")
+wpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+
+```{r}
+#wpop lda4
+topic1_keywords <- c("im", "song", "sabrina", "concert", "taylor")
+wpop_tokens %>%
+rowwise() %>%
+mutate(
+n_match = sum(str_detect(text, regex(paste0("\\b", topic1_keywords, "\\b"),
+ignore_case = TRUE)))
+) %>%
+ungroup() %>%
+filter(n_match >= 2) %>%
+distinct(text, n_match)
+```
+
+```{r}
+library(dplyr)
+library(tidytext)
+bing <- get_sentiments("bing")
+nrc <- get_sentiments("nrc")
+```
+
+```{r}
+install.packages("textdata")
+textdata::install_lexicon("nrc")
+```
+```{r}
+kpop_sent <- kpop_tokens %>%
+inner_join(bing, by = "word") %>%
+count(sentiment, sort = TRUE) %>%
+mutate(prop = n / sum(n))
+
+kpop_sent
+```
+
+```{r}
+kpop_emotions <- kpop_tokens %>%
+inner_join(nrc %>% filter(!sentiment %in% c("positive","negative")), by = "word") %>%
+count(sentiment, sort = TRUE) %>%
+mutate(prop = n / sum(n))
+kpop_emotions
+```
+
+```{r}
+wpop_sent <- wpop_tokens %>%
+inner_join(bing, by = "word") %>%
+count(sentiment, sort = TRUE) %>%
+mutate(prop = n / sum(n))
+
+wpop_sent
+```
+
+```{r}
+wpop_emotions <- wpop_tokens %>%
+inner_join(nrc %>% filter(!sentiment %in% c("positive","negative")), by = "word") %>%
+count(sentiment, sort = TRUE) %>%
+mutate(prop = n / sum(n))
+wpop_emotions
+```
+
+```{r}
+kpop_total <- 861
+wpop_total <- 904
+
+obs <- matrix(c(
+  round(kpop_total * 0.66), round(kpop_total * 0.34),
+  round(wpop_total * 0.60), round(wpop_total * 0.40)
+), nrow = 2, byrow = TRUE)
+
+rownames(obs) <- c("kpop", "wpop")
+colnames(obs) <- c("pos", "neg")
+
+chisq.test(obs)
+```
+```{r}
+kpop_anti_words <- kpop_tokens %>%
+inner_join(nrc %>% filter(sentiment == "anticipation"), by = "word") %>%
+count(word, sort = TRUE) %>%
+slice_head(n = 10)
+kpop_anti_words
+
+wpop_anti_words <- wpop_tokens %>%
+inner_join(nrc %>% filter(sentiment == "anticipation"), by = "word") %>%
+count(word, sort = TRUE) %>%
+slice_head(n = 10)
+wpop_anti_words
+```
+```{r}
+kpop_tokens %>%
+rowwise() %>%
+filter(str_detect(text, regex("\\bhope\\b", ignore_case = TRUE)))%>%
+distinct(text)
 ```
 
